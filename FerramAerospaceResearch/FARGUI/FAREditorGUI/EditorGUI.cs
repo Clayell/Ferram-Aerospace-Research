@@ -1,9 +1,9 @@
 /*
-Ferram Aerospace Research v0.16.0.3 "Mader"
+Ferram Aerospace Research v0.16.1.2 "Marangoni"
 =========================
 Aerodynamics model for Kerbal Space Program
 
-Copyright 2020, Michael Ferrara, aka Ferram4
+Copyright 2022, Michael Ferrara, aka Ferram4
 
    This file is part of Ferram Aerospace Research.
 
@@ -748,23 +748,34 @@ namespace FerramAerospaceResearch.FARGUI.FAREditorGUI
                 if (p.Modules.Contains("KSPWheelAdjustableGear"))
                 {
                     PartModule m = p.Modules["KSPWheelAdjustableGear"];
-                    MethodInfo method = m.GetType().GetMethod("deploy", BindingFlags.Instance | BindingFlags.Public);
-                    try
-                    {
-                        if (method == null)
-                            FARLogger.Error("KSPWheelAdjustableGear does not have method 'animate");
-                        else
-                            method.Invoke(m, null);
-                    }
-                    catch (Exception e)
-                    {
-                        //we just catch and print this ourselves to allow things to continue working, since there seems to be a bug in KSPWheels as of this writing
-                        FARLogger.Exception(e);
-                    }
+                    ToggleGearDeploymentOnKSPWheelPM(m, "deployAction");
+                }
+                else if (p.Modules.Contains("KSPWheelDeployment"))
+                {
+                    PartModule m = p.Modules["KSPWheelDeployment"];
+                    ToggleGearDeploymentOnKSPWheelPM(m, "toggleGearAction");
                 }
             }
 
             gearToggle = !gearToggle;
+        }
+
+        private void ToggleGearDeploymentOnKSPWheelPM(PartModule pm, string methodName)
+        {
+            MethodInfo method = pm.GetType().GetMethod(methodName, BindingFlags.Instance | BindingFlags.Public);
+            var action = new KSPActionParam(KSPActionGroup.Gear, gearToggle ? KSPActionType.Activate : KSPActionType.Deactivate);
+            try
+            {
+                if (method == null)
+                    FARLogger.Error($"{pm.GetType().Name} does not have method '{methodName}'");
+                else
+                    method.Invoke(pm, new[] { action });
+            }
+            catch (Exception e)
+            {
+                //we just catch and print this ourselves to allow things to continue working, since there seems to be a bug in KSPWheels as of this writing
+                FARLogger.Exception(e);
+            }
         }
 
         private enum FAREditorMode

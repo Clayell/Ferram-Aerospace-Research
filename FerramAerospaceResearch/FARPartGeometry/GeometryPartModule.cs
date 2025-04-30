@@ -1,9 +1,9 @@
 /*
-Ferram Aerospace Research v0.16.0.3 "Mader"
+Ferram Aerospace Research v0.16.1.2 "Marangoni"
 =========================
 Aerodynamics model for Kerbal Space Program
 
-Copyright 2020, Michael Ferrara, aka Ferram4
+Copyright 2022, Michael Ferrara, aka Ferram4
 
    This file is part of Ferram Aerospace Research.
 
@@ -57,6 +57,32 @@ using UnityEngine;
 
 namespace FerramAerospaceResearch.FARPartGeometry
 {
+    internal struct GeometryPartModuleConfig
+    {
+        public bool forceUseColliders;
+
+        public bool forceUseMeshes;
+
+        public bool ignoreForMainAxis;
+
+        public List<string> ignoredTransforms, unignoredTransforms;
+
+        public bool ignoreIfNoRenderer;
+
+        public bool rebuildOnAnimation;
+
+        public GeometryPartModuleConfig()
+        {
+            forceUseColliders = false;
+            forceUseMeshes = false;
+            ignoreForMainAxis = false;
+            ignoredTransforms = new List<string>();
+            unignoredTransforms = new List<string>();
+            ignoreIfNoRenderer = true;
+            rebuildOnAnimation = false;
+        }
+    }
+
     public class GeometryPartModule : PartModule, IRescalable<GeometryPartModule>
     {
         private static int ignoreLayer0 = -1;
@@ -85,17 +111,7 @@ namespace FerramAerospaceResearch.FARPartGeometry
         private int _sendUpdateTick;
         private int _meshesToUpdate = -1;
 
-        [SerializeField] private bool forceUseColliders;
-
-        [SerializeField] private bool forceUseMeshes;
-
-        [SerializeField] private bool ignoreForMainAxis;
-
-        [SerializeField] private List<string> ignoredTransforms, unignoredTransforms;
-
-        [SerializeField] private bool ignoreIfNoRenderer = true;
-
-        [SerializeField] private bool rebuildOnAnimation;
+        private GeometryPartModuleConfig config = new();
 
         public bool HasCrossSectionAdjusters
         {
@@ -138,7 +154,7 @@ namespace FerramAerospaceResearch.FARPartGeometry
 
         public bool IgnoreForMainAxis
         {
-            get { return ignoreForMainAxis; }
+            get { return config.ignoreForMainAxis; }
         }
 
         public void OnRescale(ScalingFactor factor)
@@ -190,10 +206,6 @@ namespace FerramAerospaceResearch.FARPartGeometry
         public override void OnAwake()
         {
             base.OnAwake();
-            if (ignoredTransforms == null)
-                ignoredTransforms = new List<string>();
-            if (unignoredTransforms == null)
-                unignoredTransforms = new List<string>();
 
             // Part has connected member that would work but it is not public...
             part.OnEditorAttach += OnEditorAttach;
@@ -227,6 +239,10 @@ namespace FerramAerospaceResearch.FARPartGeometry
             _sceneSetup = true; //this exists only to ensure that OnStart has occurred first
             if (ignoreLayer0 < 0)
                 ignoreLayer0 = LayerMask.NameToLayer("TransparentFX");
+
+            GeometryPartModule modulePrefab = part.partInfo.partPrefab.FindModuleImplementing<GeometryPartModule>();
+            if (modulePrefab is not null)
+                config = modulePrefab.config;
 
             if (part.collider == null &&
                 !part.Modules.Contains<ModuleWheelBase>() &&
@@ -358,15 +374,15 @@ namespace FerramAerospaceResearch.FARPartGeometry
 
         private bool IgnoredPredicate(Transform t)
         {
-            if (unignoredTransforms.Contains(t.name))
+            if (config.unignoredTransforms.Contains(t.name))
                 return false;
 
-            if (ignoredTransforms.Contains(t.name))
+            if (config.ignoredTransforms.Contains(t.name))
                 return true;
 
             if (t.gameObject.layer != ignoreLayer0)
             {
-                Transform prefabTransform = part.partInfo.partPrefab.FindModelTransform(t.gameObject.name);
+                Transform prefabTransform = part.partInfo.partPrefab?.FindModelTransform(t.gameObject.name);
                 if (prefabTransform is null || prefabTransform.gameObject.layer != ignoreLayer0)
                     return false;
             }
@@ -647,7 +663,7 @@ namespace FerramAerospaceResearch.FARPartGeometry
 
             if (!updateShape)
                 return;
-            if (rebuildOnAnimation)
+            if (config.rebuildOnAnimation)
                 RebuildAllMeshData();
             else
                 //event to update voxel, with rate limiter for computer's sanity and error reduction
@@ -776,7 +792,7 @@ namespace FerramAerospaceResearch.FARPartGeometry
 
             if (mf != null)
             {
-                if (skipIfNoRenderer && !unignoredTransforms.Contains(t.name))
+                if (skipIfNoRenderer && !config.unignoredTransforms.Contains(t.name))
                 {
                     MeshRenderer mr = t.GetComponent<MeshRenderer>();
                     if (mr == null)
@@ -831,13 +847,13 @@ namespace FerramAerospaceResearch.FARPartGeometry
                            part.Modules.Contains<ModuleResourceHarvester>();
 
             //Voxelize colliders
-            if ((forceUseColliders ||
+            if ((config.forceUseColliders ||
                  isFairing ||
                  isDrill ||
                  rendererBounds.size.x * rendererBounds.size.z < colliderBounds.size.x * colliderBounds.size.z * 1.6f &&
                  rendererBounds.size.y < colliderBounds.size.y * 1.2f &&
                  (rendererBounds.center - colliderBounds.center).magnitude < 0.3f) &&
-                !forceUseMeshes)
+                !config.forceUseMeshes)
                 foreach (Transform t in meshTransforms)
                 {
                     MeshData md = GetColliderMeshData(t);
@@ -874,7 +890,7 @@ namespace FerramAerospaceResearch.FARPartGeometry
                     if (t.gameObject.activeInHierarchy == false)
                         continue;
 
-                    MeshData md = GetVisibleMeshData(t, ignoreIfNoRenderer, false);
+                    MeshData md = GetVisibleMeshData(t, config.ignoreIfNoRenderer, false);
                     if (md == null)
                         continue;
 
@@ -884,12 +900,12 @@ namespace FerramAerospaceResearch.FARPartGeometry
                 }
 
                 //Voxelize Everything
-                if ((cantUseColliders || forceUseMeshes || isFairing) && !isDrill)
+                if ((cantUseColliders || config.forceUseMeshes || isFairing) && !isDrill)
                     foreach (Transform t in meshTransforms)
                     {
                         if (jettisonTransforms.Contains(t.name))
                             continue;
-                        MeshData md = GetVisibleMeshData(t, ignoreIfNoRenderer, false);
+                        MeshData md = GetVisibleMeshData(t, config.ignoreIfNoRenderer, false);
                         if (md == null)
                             continue;
 
@@ -901,10 +917,10 @@ namespace FerramAerospaceResearch.FARPartGeometry
             else
             {
                 //Voxelize Everything
-                if ((cantUseColliders || forceUseMeshes || isFairing) && !isDrill)
+                if ((cantUseColliders || config.forceUseMeshes || isFairing) && !isDrill)
                     foreach (Transform t in meshTransforms)
                     {
-                        MeshData md = GetVisibleMeshData(t, ignoreIfNoRenderer, false);
+                        MeshData md = GetVisibleMeshData(t, config.ignoreIfNoRenderer, false);
                         if (md == null)
                             continue;
 
@@ -1032,13 +1048,18 @@ namespace FerramAerospaceResearch.FARPartGeometry
         public override void OnLoad(ConfigNode node)
         {
             base.OnLoad(node);
-            LoadBool(node, "forceUseColliders", ref forceUseColliders);
-            LoadBool(node, "forceUseMeshes", ref forceUseMeshes);
-            LoadBool(node, "ignoreForMainAxis", ref ignoreForMainAxis);
-            LoadBool(node, "ignoreIfNoRenderer", ref ignoreIfNoRenderer);
-            LoadBool(node, "rebuildOnAnimation", ref rebuildOnAnimation);
-            LoadList(node, "ignoreTransform", ref ignoredTransforms);
-            LoadList(node, "unignoreTransform", ref unignoredTransforms);
+
+            // Flight passes node from the craft config which is empty, using the loaded prefab instead
+            if (HighLogic.LoadedSceneIsFlight)
+                return;
+
+            LoadBool(node, "forceUseColliders", ref config.forceUseColliders);
+            LoadBool(node, "forceUseMeshes", ref config.forceUseMeshes);
+            LoadBool(node, "ignoreForMainAxis", ref config.ignoreForMainAxis);
+            LoadBool(node, "ignoreIfNoRenderer", ref config.ignoreIfNoRenderer);
+            LoadBool(node, "rebuildOnAnimation", ref config.rebuildOnAnimation);
+            LoadList(node, "ignoreTransform", ref config.ignoredTransforms);
+            LoadList(node, "unignoreTransform", ref config.unignoredTransforms);
         }
 
         private void LoadBool(ConfigNode node, string nodeName, ref bool value)

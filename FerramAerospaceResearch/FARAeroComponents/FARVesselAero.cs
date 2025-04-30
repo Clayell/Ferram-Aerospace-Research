@@ -1,9 +1,9 @@
 /*
-Ferram Aerospace Research v0.16.0.3 "Mader"
+Ferram Aerospace Research v0.16.1.2 "Marangoni"
 =========================
 Aerodynamics model for Kerbal Space Program
 
-Copyright 2020, Michael Ferrara, aka Ferram4
+Copyright 2022, Michael Ferrara, aka Ferram4
 
    This file is part of Ferram Aerospace Research.
 
@@ -51,6 +51,22 @@ using UnityEngine;
 
 namespace FerramAerospaceResearch.FARAeroComponents
 {
+    internal readonly struct CachedSimResults
+    {
+        public readonly Vector3 VelocityVector;
+        public readonly Vector3d Position;
+        public readonly Vector3 Force;
+        public readonly Vector3 Torque;
+
+        public CachedSimResults(Vector3 velocityVector, Vector3d position, Vector3 force, Vector3 torque)
+        {
+            VelocityVector = velocityVector;
+            Position = position;
+            Force = force;
+            Torque = torque;
+        }
+    }
+
     public class FARVesselAero : VesselModule
     {
         private FlightGUI _flightGUI;
@@ -71,6 +87,8 @@ namespace FerramAerospaceResearch.FARAeroComponents
 
         private VehicleAerodynamics _vehicleAero;
         private VesselIntakeRamDrag _vesselIntakeRamDrag;
+        private CachedSimResults lastSimResults;
+        public VehicleExposure Exposure { get; private set; }
 
         internal VehicleAerodynamics VehicleAero
         {
@@ -108,6 +126,10 @@ namespace FerramAerospaceResearch.FARAeroComponents
             }
 
             _currentGeoModules = new List<GeometryPartModule>();
+
+            Exposure = gameObject.AddComponent<VehicleExposure>();
+            Exposure.transform.SetParent(transform, false);
+            Exposure.Vessel = vessel;
 
             foreach (Part p in vessel.parts)
             {
@@ -183,6 +205,8 @@ namespace FerramAerospaceResearch.FARAeroComponents
                                             out _unusedAeroModules,
                                             out _currentAeroSections,
                                             out _legacyWingModels);
+
+                Exposure.VesselBounds = _vehicleAero.VoxelBounds;
 
                 if (_flightGUI is null)
                     _flightGUI = vessel.GetComponent<FlightGUI>();
@@ -267,11 +291,25 @@ namespace FerramAerospaceResearch.FARAeroComponents
             double altitude
         )
         {
+            Vector3d position = vessel.CurrentPosition(altitude);
+
+            if (velocityWorldVector.NearlyEqual(lastSimResults.VelocityVector) &&
+                (FARAtmosphere.IsCustom
+                     // Custom atmospheres are not guaranteed to be independent of latitude and longitude
+                     ? position.NearlyEqual(lastSimResults.Position)
+                     : altitude.NearlyEqual(lastSimResults.Position.z)))
+            {
+                aeroForce = lastSimResults.Force;
+                aeroTorque = lastSimResults.Torque;
+                return;
+            }
+
             var center = new FARCenterQuery();
             var dummy = new FARCenterQuery();
 
             //Calculate main gas properties
-            GasProperties properties = FARAtmosphere.GetGasProperties(vessel, altitude, Planetarium.GetUniversalTime());
+            GasProperties properties =
+                FARAtmosphere.GetGasProperties(vessel.mainBody, position, Planetarium.GetUniversalTime());
 
             if (properties.Pressure <= 0 || properties.Temperature <= 0)
             {
@@ -316,6 +354,8 @@ namespace FerramAerospaceResearch.FARAeroComponents
 
             aeroForce = center.force;
             aeroTorque = center.TorqueAt(vessel.CoM);
+
+            lastSimResults = new CachedSimResults(velocityWorldVector, position, aeroForce, aeroTorque);
         }
 
 
@@ -484,15 +524,21 @@ namespace FerramAerospaceResearch.FARAeroComponents
             base.OnLoadVessel();
         }
 
-        public override void OnUnloadVessel()
+        private void Unsubscribe()
         {
             GameEvents.onVesselStandardModification.Remove(VesselUpdateEvent);
+        }
+
+        public override void OnUnloadVessel()
+        {
+            Unsubscribe();
 
             base.OnUnloadVessel();
         }
 
         private void OnDestroy()
         {
+            Unsubscribe();
             DisableModule();
         }
 

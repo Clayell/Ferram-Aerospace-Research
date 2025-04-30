@@ -1,9 +1,9 @@
 /*
-Ferram Aerospace Research v0.16.0.3 "Mader"
+Ferram Aerospace Research v0.16.1.2 "Marangoni"
 =========================
 Aerodynamics model for Kerbal Space Program
 
-Copyright 2020, Michael Ferrara, aka Ferram4
+Copyright 2022, Michael Ferrara, aka Ferram4
 
    This file is part of Ferram Aerospace Research.
 
@@ -114,6 +114,8 @@ namespace FerramAerospaceResearch.FARAeroComponents
         private ModuleLiftingSurface stockAeroSurfaceModule;
         private bool updateVisualization;
         public FARWingAerodynamicModel LegacyWingModel { get; private set; }
+
+        public Func<Part, Vector3, Vector3> AeroForceModifier { get; set; }
 
         public ProjectedArea ProjectedAreas
         {
@@ -270,7 +272,7 @@ namespace FerramAerospaceResearch.FARAeroComponents
 
         private void Start()
         {
-            shield = new DummyAirstreamShield {part = part};
+            shield = new DummyAirstreamShield { part = part };
 
             if (waterSlowDragNew < 0)
             {
@@ -761,6 +763,7 @@ namespace FerramAerospaceResearch.FARAeroComponents
 
             LegacyWingModel = null;
             stockAeroSurfaceModule = null;
+            AeroForceModifier = null;
         }
 
         public struct ProjectedArea
