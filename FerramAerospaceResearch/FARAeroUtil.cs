@@ -47,6 +47,7 @@ using System.Collections.Generic;
 using System.IO;
 using ferram4;
 using FerramAerospaceResearch.Settings;
+using KSPCommunityFixes;
 using UnityEngine;
 
 namespace FerramAerospaceResearch
@@ -272,11 +273,6 @@ namespace FerramAerospaceResearch
 
             loaded = true;
 
-            string forceUpdatePath = KSPUtil.ApplicationRootPath.Replace("\\", "/") +
-                                     "GameData/FerramAerospaceResearch/FARForceDataUpdate.cfg";
-            if (File.Exists(forceUpdatePath))
-                File.Delete(forceUpdatePath);
-
             //Get Kerbin
             currentBodyData = FARAeroData.AtmosphericConfiguration[1];
         }
@@ -363,7 +359,7 @@ namespace FerramAerospaceResearch
         public static bool IsNonphysical(Part p)
         {
             return p.physicalSignificance == Part.PhysicalSignificance.NONE ||
-                   p.Modules.Contains<LaunchClamp>() ||
+                   p.HasModuleImplementingFast<LaunchClamp>() ||
                    HighLogic.LoadedSceneIsEditor &&
                    p != EditorLogic.RootPart &&
                    p.PhysicsSignificance == (int)Part.PhysicalSignificance.NONE;
