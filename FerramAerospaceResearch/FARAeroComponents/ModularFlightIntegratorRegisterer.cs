@@ -107,8 +107,9 @@ namespace FerramAerospaceResearch.FARAeroComponents
         private static void UpdateAerodynamics(ModularFlightIntegrator fi, Part part)
         {
             //FIXME Proper model for airbrakes
-            if (part.HasModuleImplementingFast<ModuleAeroSurface>() ||
-                part.Modules.Contains("MissileLauncher") && part.vessel.rootPart == part)
+            if (part.vessel.rootPart == part &&
+                part.Modules.Contains<ModuleAeroSurface>() ||
+                ModUtils.IsBDArmoryInstalled && part.Modules.Contains("MissileLauncher"))
             {
                 fi.BaseFIUpdateAerodynamics(part);
             }
