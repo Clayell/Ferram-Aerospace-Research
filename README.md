@@ -1,3 +1,7 @@
+[![GitHub Downloads (all assets, latest release)](https://img.shields.io/github/downloads/Clayell/Ferram-Aerospace-Research/latest/total?label=downloads%20(latest))](https://github.com/Clayell/Ferram-Aerospace-Research/releases/latest)
+
+
+
 # Ferram Aerospace Research Continued v0.16.1.2 "Marangoni"
 
 [![Build](https://github.com/dkavolis/Ferram-Aerospace-Research/actions/workflows/package.yml/badge.svg?branch=master)](https://github.com/dkavolis/Ferram-Aerospace-Research/actions/workflows/package.yml)  
