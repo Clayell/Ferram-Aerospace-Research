@@ -59,6 +59,10 @@ namespace ferram4
         [KSPField(isPersistant = false, guiActive = false, guiName = "FARAbbrevCd")]
         public double Cd;
 
+        // Cd split (induced + profile == Cd in attached flow), for the editor drag diagnostic.
+        public double CdInduced;
+        public double CdProfile;
+
         // ReSharper disable once NotAccessedField.Global
         [KSPField(isPersistant = false, guiActive = false, guiName = "FARAbbrevCm")]
         public double Cm;
@@ -109,7 +113,7 @@ namespace ferram4
                 part_transform = part.partTransform;
         }
 
-        public Vector3d GetVelocity()
+        public virtual Vector3d GetVelocity()
         {
             if (HighLogic.LoadedSceneIsFlight)
                 return part.Rigidbody.velocity +

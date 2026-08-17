@@ -45,6 +45,7 @@ Copyright 2022, Michael Ferrara, aka Ferram4
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 using FerramAerospaceResearch;
 using UnityEngine;
 
@@ -58,6 +59,12 @@ namespace ferram4
 
         private static FloatCurve wingCamberFactor;
         private static FloatCurve wingCamberMoment;
+
+        // Thread-safe lookup tables sampled from the shared camber FloatCurves for the parallel sweep;
+        // the input is a flap-ratio in [0, 1]. See SampledCurve / FARAeroUtil.ParallelSweepActive.
+        private static SampledCurve wingCamberFactorLUT;
+        private static SampledCurve wingCamberMomentLUT;
+
         private readonly Vector3 rootChordMidLocal;
         private readonly short srfAttachFlipped;
 
@@ -127,21 +134,60 @@ namespace ferram4
             }
         }
 
-        public double EffectiveUpstreamMAC { get; private set; }
-        public double EffectiveUpstreamb_2 { get; private set; }
-        public double EffectiveUpstreamLiftSlope { get; private set; }
-        public double EffectiveUpstreamArea { get; private set; }
-        public double EffectiveUpstreamStall { get; private set; }
-        public double EffectiveUpstreamCosSweepAngle { get; private set; }
-        public double EffectiveUpstreamAoAMax { get; private set; }
-        public double EffectiveUpstreamAoA { get; private set; }
-        public double EffectiveUpstreamCd0 { get; private set; }
-        public double EffectiveUpstreamInfluence { get; private set; }
-        public bool HasWingsUpstream { get; private set; }
+        // Per-call mutable state lives in _scratch so multiple threads can evaluate
+        // independent (Mach, altitude) cells against the same FARWingInteraction
+        // instance using their own scratch. Thread-local so each worker in the parallel
+        // sweep gets its own; the single-threaded paths use the calling (main) thread's.
+        // Public properties delegate to scratch.
+        // Per-thread-slot scratch (see SimThreadContext) — an array index is much cheaper than
+        // ThreadLocal.Value under Mono. Each slot is single-threaded, so the lazy create is safe.
+        private readonly WingInteractionScratch[] _scratchSlots =
+            new WingInteractionScratch[SimThreadContext.MaxSlots];
 
-        public double ARFactor { get; private set; } = 1;
+        internal WingInteractionScratch _scratch
+        {
+            get
+            {
+                int s = SimThreadContext.Slot;
+                WingInteractionScratch sc = _scratchSlots[s];
+                if (sc == null)
+                {
+                    sc = new WingInteractionScratch();
+                    _scratchSlots[s] = sc;
+                }
 
-        public double ClInterferenceFactor { get; private set; } = 1;
+                return sc;
+            }
+        }
+
+        public double EffectiveUpstreamMAC => _scratch.EffectiveUpstreamMAC;
+        public double EffectiveUpstreamb_2 => _scratch.EffectiveUpstreamb_2;
+        public double EffectiveUpstreamLiftSlope => _scratch.EffectiveUpstreamLiftSlope;
+        public double EffectiveUpstreamArea => _scratch.EffectiveUpstreamArea;
+        public double EffectiveUpstreamStall => _scratch.EffectiveUpstreamStall;
+        public double EffectiveUpstreamCosSweepAngle => _scratch.EffectiveUpstreamCosSweepAngle;
+        public double EffectiveUpstreamAoAMax => _scratch.EffectiveUpstreamAoAMax;
+        public double EffectiveUpstreamAoA => _scratch.EffectiveUpstreamAoA;
+        public double EffectiveUpstreamCd0 => _scratch.EffectiveUpstreamCd0;
+        public double EffectiveUpstreamInfluence => _scratch.EffectiveUpstreamInfluence;
+        public bool HasWingsUpstream => _scratch.HasWingsUpstream;
+
+        public double ARFactor => _scratch.ARFactor;
+
+        public double ClInterferenceFactor => _scratch.ClInterferenceFactor;
+
+        /// <summary>
+        /// Samples the shared wing-camber FloatCurves into thread-safe lookup tables for the parallel
+        /// sweep. Main thread only. The curves are built in the constructor when the first interaction
+        /// is created (at wing init), so they exist by the time a sweep runs; guarded in case not.
+        /// </summary>
+        public static void BuildSweepLUTs()
+        {
+            if (wingCamberFactor != null)
+                wingCamberFactorLUT = new SampledCurve(wingCamberFactor, 0f, 1f, 1024);
+            if (wingCamberMoment != null)
+                wingCamberMomentLUT = new SampledCurve(wingCamberMoment, 0f, 1f, 1024);
+        }
 
         public void Destroy()
         {
@@ -159,13 +205,13 @@ namespace ferram4
         /// </summary>
         public void ResetWingInteractions()
         {
-            EffectiveUpstreamLiftSlope = 0;
-            EffectiveUpstreamStall = 0;
-            EffectiveUpstreamCosSweepAngle = 0;
-            EffectiveUpstreamAoAMax = 0;
-            EffectiveUpstreamAoA = 0;
-            EffectiveUpstreamCd0 = 0;
-            EffectiveUpstreamInfluence = 0;
+            _scratch.EffectiveUpstreamLiftSlope = 0;
+            _scratch.EffectiveUpstreamStall = 0;
+            _scratch.EffectiveUpstreamCosSweepAngle = 0;
+            _scratch.EffectiveUpstreamAoAMax = 0;
+            _scratch.EffectiveUpstreamAoA = 0;
+            _scratch.EffectiveUpstreamCd0 = 0;
+            _scratch.EffectiveUpstreamInfluence = 0;
         }
 
         /// <summary>
@@ -261,7 +307,7 @@ namespace ferram4
             ClCdInterference += 0.5f * WingInterference(forward, VesselPartList, flt_b_2);
             ClCdInterference += 0.5f * WingInterference(-forward, VesselPartList, flt_b_2);
 
-            ClInterferenceFactor = ClCdInterference;
+            _scratch.ClInterferenceFactor = ClCdInterference;
         }
 
         //This updates the interactions of all wings near this one; call this one when something changes rather than all of them at once
@@ -410,7 +456,7 @@ namespace ferram4
             float MidChordSweep
         )
         {
-            var ray = new Ray {direction = rayDirection};
+            var ray = new Ray { direction = rayDirection };
 
             nearbyWings = new FARWingAerodynamicModel[5];
 
@@ -444,7 +490,7 @@ namespace ferram4
             float MidChordSweep
         )
         {
-            var ray = new Ray {direction = rayDirection};
+            var ray = new Ray { direction = rayDirection };
 
             nearbyWings = new FARWingAerodynamicModel[5];
 
@@ -484,7 +530,7 @@ namespace ferram4
             float MAC
         )
         {
-            var ray = new Ray {direction = rayDirection};
+            var ray = new Ray { direction = rayDirection };
 
             nearbyWings = new FARWingAerodynamicModel[1];
 
@@ -536,7 +582,7 @@ namespace ferram4
                     }
                     else
                     {
-                        colliders = new[] {p.collider};
+                        colliders = new[] { p.collider };
                     }
 
                     // ReSharper disable once LoopCanBeConvertedToQuery -> closure
@@ -633,17 +679,17 @@ namespace ferram4
             double thisWingMAC = parentWingModule.GetMAC();
             double thisWingb_2 = parentWingModule.Getb_2();
 
-            EffectiveUpstreamMAC = 0;
-            EffectiveUpstreamb_2 = 0;
-            EffectiveUpstreamArea = 0;
+            _scratch.EffectiveUpstreamMAC = 0;
+            _scratch.EffectiveUpstreamb_2 = 0;
+            _scratch.EffectiveUpstreamArea = 0;
 
-            EffectiveUpstreamLiftSlope = 0;
-            EffectiveUpstreamStall = 0;
-            EffectiveUpstreamCosSweepAngle = 0;
-            EffectiveUpstreamAoAMax = 0;
-            EffectiveUpstreamAoA = 0;
-            EffectiveUpstreamCd0 = 0;
-            EffectiveUpstreamInfluence = 0;
+            _scratch.EffectiveUpstreamLiftSlope = 0;
+            _scratch.EffectiveUpstreamStall = 0;
+            _scratch.EffectiveUpstreamCosSweepAngle = 0;
+            _scratch.EffectiveUpstreamAoAMax = 0;
+            _scratch.EffectiveUpstreamAoA = 0;
+            _scratch.EffectiveUpstreamCd0 = 0;
+            _scratch.EffectiveUpstreamInfluence = 0;
 
             double wingForwardDir = parallelInPlaneLocal.y;
             double wingRightwardDir = parallelInPlaneLocal.x * srfAttachFlipped;
@@ -688,10 +734,11 @@ namespace ferram4
                 return;
             double flapRatio = (thisWingMAC / (thisWingMAC + EffectiveUpstreamMAC)).Clamp(0, 1);
             float flt_flapRatio = (float)flapRatio;
+            bool sweep = FARAeroUtil.ParallelSweepActive && wingCamberFactorLUT != null;
             //Flap Effectiveness Factor
-            double flapFactor = wingCamberFactor.Evaluate(flt_flapRatio);
+            double flapFactor = sweep ? wingCamberFactorLUT.Evaluate(flt_flapRatio) : wingCamberFactor.Evaluate(flt_flapRatio);
             //Change in moment due to change in lift from flap
-            double dCm_dCl = wingCamberMoment.Evaluate(flt_flapRatio);
+            double dCm_dCl = sweep ? wingCamberMomentLUT.Evaluate(flt_flapRatio) : wingCamberMoment.Evaluate(flt_flapRatio);
 
             //This accounts for the wing possibly having a longer span than the flap
             double WingFraction = (thisWingb_2 / EffectiveUpstreamb_2).Clamp(0, 1);
@@ -725,8 +772,8 @@ namespace ferram4
             double wingForwardDir = parallelInPlaneLocal.y;
             double wingRightwardDir = parallelInPlaneLocal.x * srfAttachFlipped;
 
-            ARFactor = CalculateARFactor(wingForwardDir, wingRightwardDir);
-            HasWingsUpstream = DetermineWingsUpstream(wingForwardDir, wingRightwardDir);
+            _scratch.ARFactor = CalculateARFactor(wingForwardDir, wingRightwardDir);
+            _scratch.HasWingsUpstream = DetermineWingsUpstream(wingForwardDir, wingRightwardDir);
         }
 
         private void UpdateUpstreamValuesFromWingModules(
@@ -749,27 +796,33 @@ namespace ferram4
                     continue;
                 }
 
-                if (wingModule.isShielded)
+                if (wingModule.GetShielded())
                     continue;
 
-                double tmp = Vector3.Dot(wingModule.transform.forward, parentWingModule.transform.forward);
+                Vector3 wingForward = wingModule.SimGeom.HasValue
+                                          ? wingModule.SimGeom.Value.Forward
+                                          : wingModule.transform.forward;
+                Vector3 parentForward = parentWingModule.SimGeom.HasValue
+                                            ? parentWingModule.SimGeom.Value.Forward
+                                            : parentWingModule.transform.forward;
+                double tmp = Vector3.Dot(wingForward, parentForward);
 
-                EffectiveUpstreamMAC += wingModule.GetMAC() * wingInfluenceFactor;
-                EffectiveUpstreamb_2 += wingModule.Getb_2() * wingInfluenceFactor;
-                EffectiveUpstreamArea += wingModule.S * wingInfluenceFactor;
+                _scratch.EffectiveUpstreamMAC += wingModule.GetMAC() * wingInfluenceFactor;
+                _scratch.EffectiveUpstreamb_2 += wingModule.Getb_2() * wingInfluenceFactor;
+                _scratch.EffectiveUpstreamArea += wingModule.S * wingInfluenceFactor;
 
-                EffectiveUpstreamLiftSlope += wingModule.GetRawLiftSlope() * wingInfluenceFactor;
-                EffectiveUpstreamStall += wingModule.GetStall() * wingInfluenceFactor;
-                EffectiveUpstreamCosSweepAngle += wingModule.GetCosSweepAngle() * wingInfluenceFactor;
-                EffectiveUpstreamAoAMax += wingModule.rawAoAmax * wingInfluenceFactor;
-                EffectiveUpstreamCd0 += wingModule.GetCd0() * wingInfluenceFactor;
-                EffectiveUpstreamInfluence += wingInfluenceFactor;
+                _scratch.EffectiveUpstreamLiftSlope += wingModule.GetRawLiftSlope() * wingInfluenceFactor;
+                _scratch.EffectiveUpstreamStall += wingModule.GetStall() * wingInfluenceFactor;
+                _scratch.EffectiveUpstreamCosSweepAngle += wingModule.GetCosSweepAngle() * wingInfluenceFactor;
+                _scratch.EffectiveUpstreamAoAMax += wingModule.GetRawAoAmax() * wingInfluenceFactor;
+                _scratch.EffectiveUpstreamCd0 += wingModule.GetCd0() * wingInfluenceFactor;
+                _scratch.EffectiveUpstreamInfluence += wingInfluenceFactor;
 
                 double wAoA = wingModule.CalculateAoA(wingModule.GetVelocity()) * Math.Sign(tmp);
                 //First, make sure that the AoA are wrt the same direction; then account for any strange angling of the part that shouldn't be there
                 tmp = (thisWingAoA - wAoA) * wingInfluenceFactor;
 
-                EffectiveUpstreamAoA += tmp;
+                _scratch.EffectiveUpstreamAoA += tmp;
             }
         }
 
